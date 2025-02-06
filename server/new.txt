@@ -1,0 +1,191 @@
+//Employee.js
+const mongoose = require('mongoose');
+
+// Define the employee schema
+const employeeSchema = new mongoose.Schema({
+    name: { type: String, required: true },
+    role: { type: String, required: true },
+    department: { type: String, required: true },
+    salary: { type: Number, required: true },
+    attendance: { type: Number, default: 0 } // Optional: could be used for attendance tracking
+});
+
+// Define the user schema for authentication
+const userSchema = new mongoose.Schema({
+    username: { type: String, required: true, unique: true },
+    password: { type: String, required: true },
+});
+
+// Create and export the models
+const Employee = mongoose.model('Employee', employeeSchema);
+const User = mongoose.model('User', userSchema);
+
+module.exports = { Employee, User };
+
+
+
+employeeRoutes.js
+const express = require('express');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
+const { Employee, User } = require('../models/Employee');
+const router = express.Router();
+
+// Middleware to verify JWT
+const authMiddleware = (req, res, next) => {
+    const token = req.header('Authorization');
+    if (!token) {
+        return res.status(401).json({ message: 'Access denied. No token provided.' });
+    }
+
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        req.user = decoded; // Add user info to the request
+        next();
+    } catch (error) {
+        res.status(401).json({ message: 'Invalid token.' });
+    }
+};
+
+// POST: Register a new user
+router.post('/register', async (req, res) => {
+    const { username, password } = req.body;
+
+    try {
+        const existingUser = await User.findOne({ username });
+        if (existingUser) {
+            return res.status(400).json({ message: 'Username already exists.' });
+        }
+
+        const salt = await bcrypt.genSalt(10);
+        const hashedPassword = await bcrypt.hash(password, salt);
+
+        const newUser = new User({ username, password: hashedPassword });
+        await newUser.save();
+
+        res.status(201).json({ message: 'User registered successfully.' });
+    } catch (error) {
+        res.status(500).json({ message: 'Server error.' });
+    }
+});
+
+// POST: Login user
+router.post('/login', async (req, res) => {
+    const { username, password } = req.body;
+
+    try {
+        const user = await User.findOne({ username });
+        if (!user) {
+            return res.status(400).json({ message: 'Invalid username or password.' });
+        }
+
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) {
+            return res.status(400).json({ message: 'Invalid username or password.' });
+        }
+
+        const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+
+        res.status(200).json({ token });
+    } catch (error) {
+        res.status(500).json({ message: 'Server error.' });
+    }
+});
+
+// GET: Retrieve all employees (Protected)
+router.get('/', authMiddleware, async (req, res) => {
+    try {
+        const employees = await Employee.find();
+        res.status(200).json(employees);
+    } catch (err) {
+        res.status(400).json({ error: 'Failed to fetch employees' });
+    }
+});
+
+// POST: Create a new employee (Protected)
+router.post('/', authMiddleware, async (req, res) => {
+    const { name, role, department, salary } = req.body;
+
+    try {
+        if (!name || !role || !department || !salary) {
+            return res.status(400).json({ error: 'All fields are required' });
+        }
+
+        const newEmployee = new Employee({ name, role, department, salary });
+        await newEmployee.save();
+        res.status(201).json(newEmployee);
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to create employee' });
+    }
+});
+
+// PUT: Update an employee by ID (Protected)
+router.put('/:id', authMiddleware, async (req, res) => {
+    const { name, role, department, salary } = req.body;
+
+    try {
+        const updatedEmployee = await Employee.findByIdAndUpdate(
+            req.params.id,
+            { name, role, department, salary },
+            { new: true }
+        );
+        if (!updatedEmployee) {
+            return res.status(404).json({ error: 'Employee not found' });
+        }
+        res.status(200).json(updatedEmployee);
+    } catch (err) {
+        res.status(400).json({ error: 'Failed to update employee' });
+    }
+});
+
+// DELETE: Delete an employee by ID (Protected)
+router.delete('/:id', authMiddleware, async (req, res) => {
+    try {
+        const deletedEmployee = await Employee.findByIdAndDelete(req.params.id);
+        if (!deletedEmployee) {
+            return res.status(404).json({ error: 'Employee not found' });
+        }
+        res.status(200).json({ message: 'Employee deleted successfully' });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to delete employee' });
+    }
+});
+
+module.exports = router;
+
+
+
+
+//index.js
+const express = require('express');
+const mongoose = require('mongoose');
+const dotenv = require('dotenv');
+const cors = require('cors');
+const authRoutes = require('./routes/employeeRoutes');
+const employeeRoutes = require('./routes/employeeRoutes');
+
+// Initialize dotenv to access environment variables
+dotenv.config();
+
+// Create the express app
+const app = express();
+
+// Middleware setup
+app.use(cors());  // Enable CORS for all origins
+app.use(express.json());  // Middleware for parsing JSON bodies
+
+// Use routes for employee-related APIs
+app.use('/api/employeeRoutes', authRoutes); // Add authentication routes
+app.use('/api/employees', employeeRoutes); // Employee routes (now protected)
+
+// Connect to MongoDB
+mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+    .then(() => console.log('Connected to MongoDB'))
+    .catch((err) => console.error('MongoDB connection error:', err));
+
+// Start the server
+const PORT = process.env.PORT || 5001;
+
+app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+});
